@@ -1111,21 +1111,16 @@ impl WindowInner {
     }
 
     fn update_titlebar_background(&self) {
-        if !self
+        let use_custom_titlebar_color = self
             .config
             .window_decorations
-            .contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR)
-        {
+            .contains(WindowDecorations::MACOS_USE_BACKGROUND_COLOR_AS_TITLEBAR_COLOR);
+
+        let needs_opacity = self.config.window_background_opacity < 1.0;
+
+        if !use_custom_titlebar_color && !needs_opacity {
             return;
         }
-
-        // Set the titlebar background to the theme color falling back to black if there is no
-        // specified color scheme
-        let color = self
-            .config
-            .resolved_palette
-            .background
-            .unwrap_or(RgbaColor::from(SrgbaTuple(0., 0., 0., 255.)));
 
         unsafe {
             if let Some(titlebar_view_container) = get_titlebar_view_container(&self.window) {
@@ -1136,11 +1131,24 @@ impl WindowInner {
                 }
 
                 // We need to make sure to convert the config color into an sRGB CGColor or the color will be slightly off
+                let color = if use_custom_titlebar_color {
+                    // Use the terminal background color
+                    self.config
+                        .resolved_palette
+                        .background
+                        .unwrap_or(RgbaColor::from(SrgbaTuple(0., 0., 0., 1.)))
+                } else {
+                    // Use the active titlebar color
+                    // We don't support inactive titlebar color
+                    self.config.window_frame.active_titlebar_bg.into()
+                };
+
+                // Apply window_background_opacity to the alpha channel
                 let srgb_cgcolor = objc2_core_graphics::CGColor::new_srgb(
                     color.0.into(),
                     color.1.into(),
                     color.2.into(),
-                    color.3.into(),
+                    (color.3 * self.config.window_background_opacity).into(),
                 );
 
                 let _: () = msg_send![layer, setBackgroundColor: srgb_cgcolor];
@@ -2242,21 +2250,31 @@ impl WindowView {
 
     extern "C" fn did_become_key(this: &mut Object, _sel: Sel, _id: id) {
         if let Some(this) = Self::get_this(this) {
+            let window_id = this.inner.borrow().window_id;
             this.inner
                 .borrow_mut()
                 .events
                 .dispatch(WindowEvent::FocusChanged(true));
             this.update_application_presentation(true);
+            Connection::with_window_inner(window_id, |inner| {
+                inner.update_titlebar_background();
+                Ok(())
+            });
         }
     }
 
     extern "C" fn did_resign_key(this: &mut Object, _sel: Sel, _id: id) {
         if let Some(this) = Self::get_this(this) {
+            let window_id = this.inner.borrow().window_id;
             this.inner
                 .borrow_mut()
                 .events
                 .dispatch(WindowEvent::FocusChanged(false));
             this.update_application_presentation(true);
+            Connection::with_window_inner(window_id, |inner| {
+                inner.update_titlebar_background();
+                Ok(())
+            });
         }
     }
 
