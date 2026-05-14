@@ -1197,6 +1197,7 @@ impl WindowInner {
                     current_app.setPresentationOptions_(
                         NSApplicationPresentationOptions::NSApplicationPresentationDefault,
                     );
+                    self.update_titlebar_background();
                 },
                 None => unsafe {
                     // Go full screen
