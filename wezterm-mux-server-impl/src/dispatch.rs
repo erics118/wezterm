@@ -58,9 +58,18 @@ where
     });
     let handler = Arc::new(Mutex::new(SessionHandler::new(pdu_sender)));
 
+    // The subscription is only removed by the next notification, which may
+    // come long after the client disconnects, so it holds the sender weakly
+    // to avoid keeping the channel and its buffers alive until then.
+    // See <https://github.com/wezterm/wezterm/issues/7363>
+    let notif_tx = Arc::new(notif_tx);
     {
         let mux = Mux::get();
-        mux.subscribe(move |n| notif_tx.try_send(n).is_ok());
+        let tx = Arc::downgrade(&notif_tx);
+        mux.subscribe(move |n| match tx.upgrade() {
+            Some(tx) => tx.try_send(n).is_ok(),
+            None => false,
+        });
     }
 
     // Writer task: drain write channel, encode + flush to stream.
