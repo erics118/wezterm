@@ -2833,7 +2833,6 @@ impl WindowView {
                     key_is_down,
                 });
                 inner.ime_state = ImeDisposition::None;
-                inner.ime_text.clear();
             }
 
             unsafe {
