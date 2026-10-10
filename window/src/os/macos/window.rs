@@ -1279,7 +1279,14 @@ impl WindowInner {
                 }
 
                 // We need to make sure to convert the config color into an sRGB CGColor or the color will be slightly off
-                let color = if use_custom_titlebar_color {
+                let color = if self
+                    .config
+                    .window_decorations
+                    .contains(WindowDecorations::INTEGRATED_BUTTONS)
+                {
+                    // the tab bar sits under the titlebar and paints its own background
+                    RgbaColor::from(SrgbaTuple(0., 0., 0., 0.))
+                } else if use_custom_titlebar_color {
                     // Use the terminal background color
                     self.config
                         .resolved_palette

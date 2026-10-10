@@ -505,6 +505,12 @@ pub struct Config {
     #[dynamic(default = "default_true")]
     pub show_close_tab_button_in_tabs: bool,
 
+    #[dynamic(default)]
+    pub fancy_tab_bar_alignment: FancyTabBarAlignment,
+
+    #[dynamic(default)]
+    pub fancy_tab_bar_tab_shape: FancyTabBarTabShape,
+
     /// If true, show_tab_index_in_tab_bar uses a zero-based index.
     /// The default is false and the tab shows a one-based index.
     #[dynamic(default)]
@@ -1994,6 +2000,20 @@ pub enum HorizontalWindowContentAlignment {
     Left,
     Center,
     Right,
+}
+
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FancyTabBarAlignment {
+    #[default]
+    Left,
+    Center,
+}
+
+#[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FancyTabBarTabShape {
+    #[default]
+    Tab,
+    Pill,
 }
 
 #[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]

@@ -6,10 +6,13 @@ use crate::termwindow::render::corners::*;
 use crate::termwindow::render::window_buttons::window_button_element;
 use crate::termwindow::{UIItem, UIItemType};
 use crate::utilsprites::RenderMetrics;
-use config::{Dimension, DimensionContext, TabBarColors};
+use config::{
+    Dimension, DimensionContext, FancyTabBarAlignment, FancyTabBarTabShape, TabBarColors,
+};
 use std::rc::Rc;
 use wezterm_font::LoadedFont;
 use wezterm_term::color::{ColorAttribute, ColorPalette};
+use window::color::LinearRgba;
 use window::{IntegratedTitleButtonAlignment, IntegratedTitleButtonStyle};
 
 const X_BUTTON: &[Poly] = &[
@@ -88,6 +91,11 @@ impl crate::TermWindow {
             .to_linear()
             .into(),
         };
+        // only the bar itself paints the titlebar colour, which would stack when it is translucent
+        let group_colors = ElementColors {
+            bg: LinearRgba::TRANSPARENT.into(),
+            ..bar_colors.clone()
+        };
         let tab_vertical_alignment = if self.config.tab_bar_at_bottom {
             VerticalAlign::Top
         } else {
@@ -134,7 +142,7 @@ impl crate::TermWindow {
                         bottom: Dimension::Cells(0.),
                     })
                     .border(BoxDimension::new(Dimension::Pixels(0.)))
-                    .colors(bar_colors.clone()),
+                    .colors(group_colors.clone()),
                 TabBarItem::NewTabButton => Element::new(
                     &font,
                     ElementContent::Poly {
@@ -417,19 +425,13 @@ impl crate::TermWindow {
                             ElementContent::Children(kids)
                         }
                     };
+                    if self.config.fancy_tab_bar_tab_shape == FancyTabBarTabShape::Pill {
+                        elem = pill(elem);
+                    }
                     left_eles.push(elem);
                 }
                 _ => left_eles.push(item_to_elem(item)),
             }
-        }
-
-        let mut children = vec![];
-
-        if !left_status.is_empty() {
-            children.push(
-                Element::new(&font, ElementContent::Children(left_status))
-                    .colors(bar_colors.clone()),
-            );
         }
 
         let window_buttons_at_left = self
@@ -456,10 +458,59 @@ impl crate::TermWindow {
             Dimension::Cells(0.5)
         };
 
+        let border = self.get_os_border();
+        let layout_context = LayoutContext {
+            height: DimensionContext {
+                dpi: self.dimensions.dpi as f32,
+                pixel_max: self.dimensions.pixel_height as f32,
+                pixel_cell: metrics.cell_size.height as f32,
+            },
+            width: DimensionContext {
+                dpi: self.dimensions.dpi as f32,
+                pixel_max: self.dimensions.pixel_width as f32,
+                pixel_cell: metrics.cell_size.width as f32,
+            },
+            bounds: euclid::rect(
+                border.left.get() as f32,
+                0.,
+                self.dimensions.pixel_width as f32 - (border.left + border.right).get() as f32,
+                tab_bar_height,
+            ),
+            metrics: &metrics,
+            gl_state: self.render_state.as_ref().unwrap(),
+            zindex: 10,
+        };
+
+        // centered tabs are padded to the middle of the window, but never into the reserved left space
+        let left_padding = if self.config.fancy_tab_bar_alignment == FancyTabBarAlignment::Center {
+            let measure = |eles: &[Element]| -> anyhow::Result<f32> {
+                let group = Element::new(&font, ElementContent::Children(eles.to_vec()));
+                Ok(self
+                    .compute_element(&layout_context, &group)?
+                    .bounds
+                    .width())
+            };
+            let reserved = left_padding.evaluate_as_pixels(layout_context.width);
+            let centered = (self.dimensions.pixel_width as f32 - measure(&left_eles)?) / 2.
+                - measure(&left_status)?;
+            Dimension::Pixels(centered.max(reserved).floor())
+        } else {
+            left_padding
+        };
+
+        let mut children = vec![];
+
+        if !left_status.is_empty() {
+            children.push(
+                Element::new(&font, ElementContent::Children(left_status))
+                    .colors(group_colors.clone()),
+            );
+        }
+
         children.push(
             Element::new(&font, ElementContent::Children(left_eles))
                 .vertical_align(tab_vertical_alignment)
-                .colors(bar_colors.clone())
+                .colors(group_colors.clone())
                 .padding(BoxDimension {
                     left: left_padding,
                     right: Dimension::Cells(0.),
@@ -470,7 +521,7 @@ impl crate::TermWindow {
         );
         children.push(
             Element::new(&font, ElementContent::Children(right_eles))
-                .colors(bar_colors.clone())
+                .colors(group_colors)
                 .float(Float::Right),
         );
 
@@ -484,32 +535,7 @@ impl crate::TermWindow {
             .vertical_align(tab_vertical_alignment)
             .colors(bar_colors);
 
-        let border = self.get_os_border();
-
-        let mut computed = self.compute_element(
-            &LayoutContext {
-                height: DimensionContext {
-                    dpi: self.dimensions.dpi as f32,
-                    pixel_max: self.dimensions.pixel_height as f32,
-                    pixel_cell: metrics.cell_size.height as f32,
-                },
-                width: DimensionContext {
-                    dpi: self.dimensions.dpi as f32,
-                    pixel_max: self.dimensions.pixel_width as f32,
-                    pixel_cell: metrics.cell_size.width as f32,
-                },
-                bounds: euclid::rect(
-                    border.left.get() as f32,
-                    0.,
-                    self.dimensions.pixel_width as f32 - (border.left + border.right).get() as f32,
-                    tab_bar_height,
-                ),
-                metrics: &metrics,
-                gl_state: self.render_state.as_ref().unwrap(),
-                zindex: 10,
-            },
-            &tabs,
-        )?;
+        let mut computed = self.compute_element(&layout_context, &tabs)?;
 
         computed.translate(euclid::vec2(
             0.,
@@ -535,6 +561,39 @@ impl crate::TermWindow {
 
         Ok(ui_items)
     }
+}
+
+// rounds all four corners and centers the tab in the bar, with a gap to its neighbours
+fn pill(elem: Element) -> Element {
+    let corner = |poly| SizedPoly {
+        width: Dimension::Cells(1.2),
+        height: Dimension::Cells(0.6),
+        poly,
+    };
+    // the corners paint in the border colour, so it must match the fill
+    let fill = |mut colors: ElementColors| {
+        if let InheritableColor::Color(bg) = colors.bg {
+            colors.border = BorderColor::new(bg);
+        }
+        colors
+    };
+    let colors = fill(elem.colors.clone());
+    let hover_colors = elem.hover_colors.clone().map(fill);
+    elem.vertical_align(VerticalAlign::Middle)
+        .margin(BoxDimension {
+            left: Dimension::Cells(0.25),
+            right: Dimension::Cells(0.25),
+            top: Dimension::Cells(0.),
+            bottom: Dimension::Cells(0.),
+        })
+        .border_corners(Some(Corners {
+            top_left: corner(TOP_LEFT_ROUNDED_CORNER),
+            top_right: corner(TOP_RIGHT_ROUNDED_CORNER),
+            bottom_left: corner(BOTTOM_LEFT_ROUNDED_CORNER),
+            bottom_right: corner(BOTTOM_RIGHT_ROUNDED_CORNER),
+        }))
+        .colors(colors)
+        .hover_colors(hover_colors)
 }
 
 fn make_x_button(
