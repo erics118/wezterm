@@ -31,6 +31,8 @@ opt-level = 3
 # https://jakedeichert.com/blog/reducing-rust-incremental-compilation-times-on-macos-by-70-percent/
 # Disabled because it breaks builds on Windows
 #split-debuginfo = "unpacked"
+# backtraces keep file and line, and incremental rebuilds skip the full variable info
+debug = "line-tables-only"
 
 [workspace.dependencies]
 ahash = "0.8"
