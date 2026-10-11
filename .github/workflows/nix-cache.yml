@@ -1,0 +1,45 @@
+name: nix cache
+
+# builds the fork's package for every system erics118/nixos-config installs it on,
+# so a switch there downloads it from erics118-wezterm instead of building it
+on:
+  push:
+    branches: [eric]
+  workflow_dispatch:
+
+# only the newest push to eric is worth caching
+concurrency:
+  group: nix-cache-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.repository == 'erics118/wezterm'
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-26
+          - ubuntu-26.04
+          - ubuntu-26.04-arm
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
+
+      # pushes everything built, so the dependency build is reused by the next commit too
+      - uses: cachix/cachix-action@38b082610b782e7e93e209c35fd730d399dee866 # v17
+        with:
+          name: erics118-wezterm
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          # store scan, since the daemon's push drain can time out and fail the job
+          useDaemon: false
+
+      - run: nix build ./nix --print-build-logs
