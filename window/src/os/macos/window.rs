@@ -2,16 +2,17 @@
 #![allow(clippy::let_unit_value)]
 
 use super::keycodes::*;
-use super::{from_yes_no, nsstring, nsstring_to_str, to_yes_no};
+use super::{from_yes_no, nsstring, nsstring_to_str, to_yes_no, toolbar};
 use crate::clipboard::Clipboard as ClipboardContext;
 use crate::connection::ConnectionOps;
 use crate::os::macos::menu::{MenuItem, RepresentedItem};
 use crate::parameters::{Border, Parameters, TitleBar};
 use crate::{
     Clipboard, Connection, CursorIcon, DeadKeyStatus, Dimensions, Handled, KeyCode, KeyEvent,
-    Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, Point, RawKeyEvent, Rect,
-    RequestedWindowGeometry, ResizeIncrement, ResolvedGeometry, ScreenPoint, Size, ULength,
-    WindowDecorations, WindowEvent, WindowEventSender, WindowOps, WindowState,
+    Modifiers, MouseButtons, MouseEvent, MouseEventKind, MousePress, NativeTab, Point, RawKeyEvent,
+    Rect, RequestedWindowGeometry, ResizeIncrement, ResolvedGeometry, ScreenPoint, Size,
+    ToolbarLabel, ULength, WindowDecorations, WindowEvent, WindowEventSender, WindowOps,
+    WindowState,
 };
 use anyhow::{anyhow, bail, ensure};
 use async_trait::async_trait;
@@ -26,6 +27,7 @@ use cocoa::foundation::{
     NSArray, NSAutoreleasePool, NSFastEnumeration, NSInteger, NSNotFound, NSPoint, NSRect, NSSize,
     NSString, NSUInteger,
 };
+use config::keyassignment::KeyAssignment;
 use config::window::WindowLevel;
 use config::{ConfigHandle, RgbaColor, SrgbaTuple};
 use core_foundation::base::{CFTypeID, TCFType};
@@ -472,6 +474,9 @@ pub(crate) struct WindowInner {
     view: StrongPtr,
     window: StrongPtr,
     config: ConfigHandle,
+    /// kept for a native toolbar that is added after the tabs and label arrive
+    native_tabs: Vec<NativeTab>,
+    toolbar_label: ToolbarLabel,
 }
 
 fn function_key_to_keycode(function_key: char) -> KeyCode {
@@ -733,6 +738,8 @@ impl Window {
                 window,
                 view,
                 config: config.clone(),
+                native_tabs: vec![],
+                toolbar_label: ToolbarLabel::default(),
             }));
             inner.borrow_mut().window.replace(weak_window);
             conn.windows
@@ -966,6 +973,22 @@ impl WindowOps for Window {
         });
     }
 
+    fn set_native_tabs(&self, tabs: Vec<NativeTab>) {
+        Connection::with_window_inner(self.id, move |inner| {
+            unsafe { toolbar::set_tabs(*inner.window, &tabs) };
+            inner.native_tabs = tabs;
+            Ok(())
+        });
+    }
+
+    fn set_toolbar_label(&self, label: ToolbarLabel) {
+        Connection::with_window_inner(self.id, move |inner| {
+            unsafe { toolbar::set_label(*inner.window, &label) };
+            inner.toolbar_label = label;
+            Ok(())
+        });
+    }
+
     fn get_os_parameters(
         &self,
         config: &ConfigHandle,
@@ -1138,6 +1161,17 @@ impl WindowInner {
                 self.config.window_decorations,
                 self.config.integrated_title_button_style,
             );
+            self.apply_toolbar();
+        }
+    }
+
+    // appkit drops the toolbar whenever the window loses its titlebar, even for a moment,
+    // so this runs after every change of the style mask
+    fn apply_toolbar(&self) {
+        unsafe {
+            toolbar::update(*self.window, self.config.macos_native_tab_bar);
+            toolbar::set_label(*self.window, &self.toolbar_label);
+            toolbar::set_tabs(*self.window, &self.native_tabs);
         }
     }
 
@@ -1191,6 +1225,7 @@ impl WindowInner {
                         self.config.window_decorations,
                         self.config.integrated_title_button_style,
                     );
+                    self.apply_toolbar();
                     self.window.setFrame_display_(saved_rect, YES);
                     self.window.makeKeyAndOrderFront_(nil);
                     self.window.setOpaque_(NO);
@@ -1362,6 +1397,7 @@ impl WindowInner {
                 self.config.window_decorations,
                 self.config.integrated_title_button_style,
             );
+            self.apply_toolbar();
 
             self.update_titlebar_background();
 
@@ -2488,6 +2524,61 @@ impl WindowView {
         NO
     }
 
+    // a native toolbar tab button, whose tag is its tab index
+    extern "C" fn wezterm_activate_tab(this: &mut Object, _sel: Sel, button: *mut Object) {
+        let idx: NSInteger = unsafe { msg_send![button, tag] };
+        if let Some(this) = Self::get_this(this) {
+            this.inner
+                .borrow_mut()
+                .events
+                .dispatch(WindowEvent::PerformKeyAssignment(
+                    KeyAssignment::ActivateTab(idx as isize),
+                ));
+        }
+    }
+
+    // a native toolbar tab dropped at a new place, after the drag activated it
+    extern "C" fn wezterm_move_tab(this: &mut Object, _sel: Sel, tab: *mut Object) {
+        let target: NSInteger = unsafe { msg_send![tab, targetIndex] };
+        if let Some(this) = Self::get_this(this) {
+            this.inner
+                .borrow_mut()
+                .events
+                .dispatch(WindowEvent::PerformKeyAssignment(KeyAssignment::MoveTab(
+                    target as usize,
+                )));
+        }
+    }
+
+    // a native toolbar tab's close button, whose tag is its tab index
+    extern "C" fn wezterm_close_tab(this: &mut Object, _sel: Sel, button: *mut Object) {
+        let idx: NSInteger = unsafe { msg_send![button, tag] };
+        if let Some(this) = Self::get_this(this) {
+            let mut inner = this.inner.borrow_mut();
+            inner.events.dispatch(WindowEvent::PerformKeyAssignment(
+                KeyAssignment::ActivateTab(idx as isize),
+            ));
+            inner.events.dispatch(WindowEvent::PerformKeyAssignment(
+                KeyAssignment::CloseCurrentTab { confirm: true },
+            ));
+        }
+    }
+
+    // a native toolbar label menu entry, whose represented object is its id
+    extern "C" fn wezterm_toolbar_menu_item(this: &mut Object, _sel: Sel, item: *mut Object) {
+        let id: id = unsafe { msg_send![item, representedObject] };
+        if id.is_null() {
+            return;
+        }
+        let id = unsafe { nsstring_to_str(id) }.to_string();
+        if let Some(this) = Self::get_this(this) {
+            this.inner
+                .borrow_mut()
+                .events
+                .dispatch(WindowEvent::ToolbarMenuItem(id));
+        }
+    }
+
     extern "C" fn wezterm_perform_key_assignment(
         this: &mut Object,
         _sel: Sel,
@@ -3160,6 +3251,10 @@ impl WindowView {
                 gl_context_pair.backend.update();
             }
         }
+        unsafe {
+            let window: id = msg_send![this, window];
+            toolbar::fit(window);
+        }
 
         let frame = unsafe { NSView::frame(this as *mut _) };
         let backing_frame = unsafe { NSView::convertRectToBacking(this as *mut _, frame) };
@@ -3463,6 +3558,22 @@ impl WindowView {
                 sel!(weztermPerformKeyAssignment:),
                 Self::wezterm_perform_key_assignment
                     as extern "C" fn(&mut Object, Sel, *mut Object),
+            );
+            cls.add_method(
+                sel!(weztermActivateTab:),
+                Self::wezterm_activate_tab as extern "C" fn(&mut Object, Sel, *mut Object),
+            );
+            cls.add_method(
+                sel!(weztermToolbarMenuItem:),
+                Self::wezterm_toolbar_menu_item as extern "C" fn(&mut Object, Sel, *mut Object),
+            );
+            cls.add_method(
+                sel!(weztermMoveTab:),
+                Self::wezterm_move_tab as extern "C" fn(&mut Object, Sel, *mut Object),
+            );
+            cls.add_method(
+                sel!(weztermCloseTab:),
+                Self::wezterm_close_tab as extern "C" fn(&mut Object, Sel, *mut Object),
             );
 
             cls.add_method(

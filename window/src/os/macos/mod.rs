@@ -11,6 +11,7 @@ pub mod bitmap;
 pub mod clipboard;
 pub mod connection;
 pub mod menu;
+mod toolbar;
 pub mod window;
 
 mod keycodes;

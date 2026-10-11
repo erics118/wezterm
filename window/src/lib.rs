@@ -146,6 +146,46 @@ pub enum DeadKeyStatus {
     Composing(String),
 }
 
+/// A tab as the native titlebar shows it
+#[derive(Debug, Clone, PartialEq)]
+pub struct NativeTab {
+    /// the title in runs of text, each with its colour, or None for the platform's label colour
+    pub runs: Vec<(String, Option<color::SrgbaTuple>)>,
+    pub active: bool,
+    /// shown in a slot before the title that stays even when this is None, so titles never move
+    pub status: Option<StatusIcon>,
+}
+
+/// An SF Symbols name with its colour, or the secondary label colour when None
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct StatusIcon {
+    pub symbol: String,
+    pub color: Option<color::SrgbaTuple>,
+}
+
+/// The label before the native titlebar's tabs, and the menu it opens on a click
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ToolbarLabel {
+    /// an SF Symbols name shown before the text, or none when empty
+    pub symbol: String,
+    /// the symbol's colour, or the secondary label colour when None
+    pub symbol_color: Option<color::SrgbaTuple>,
+    pub title: String,
+    pub subtitle: String,
+    pub dimmed: bool,
+    pub menu: Vec<ToolbarMenuItem>,
+}
+
+/// A menu entry, or a separator when its title is empty.
+/// choosing it sends WindowEvent::ToolbarMenuItem with its id
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ToolbarMenuItem {
+    pub id: String,
+    pub title: String,
+    pub checked: bool,
+    pub icon: Option<StatusIcon>,
+}
+
 #[derive(Debug)]
 pub enum WindowEvent {
     /// Called when the window close button is clicked.
@@ -208,6 +248,9 @@ pub enum WindowEvent {
     PerformKeyAssignment(config::keyassignment::KeyAssignment),
 
     AdviseModifiersLedStatus(Modifiers, KeyboardLedStatus),
+
+    /// An entry of the native titlebar's label menu was chosen, by its id
+    ToolbarMenuItem(String),
 }
 
 pub struct WindowEventSender {
@@ -326,6 +369,13 @@ pub trait WindowOps {
     fn toggle_fullscreen(&self) {}
 
     fn config_did_change(&self, _config: &config::ConfigHandle) {}
+
+    /// Show the tabs in the native titlebar, where the platform has one
+    /// (`macos_native_tab_bar`)
+    fn set_native_tabs(&self, _tabs: Vec<NativeTab>) {}
+
+    /// Set the label before the native titlebar's tabs, and its menu
+    fn set_toolbar_label(&self, _label: ToolbarLabel) {}
 
     /// Configure the Window so that the desktop environment
     /// will constrain resizes so that they are multiples of
