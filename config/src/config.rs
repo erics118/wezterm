@@ -511,6 +511,10 @@ pub struct Config {
     #[dynamic(default)]
     pub fancy_tab_bar_tab_shape: FancyTabBarTabShape,
 
+    /// macOS only: show the tabs in a native unified toolbar instead of drawing a tab bar
+    #[dynamic(default)]
+    pub macos_native_tab_bar: bool,
+
     /// If true, show_tab_index_in_tab_bar uses a zero-based index.
     /// The default is false and the tab shows a one-based index.
     #[dynamic(default)]

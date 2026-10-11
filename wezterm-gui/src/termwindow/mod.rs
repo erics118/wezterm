@@ -66,7 +66,7 @@ use termwiz::hyperlink::Hyperlink;
 use termwiz::surface::SequenceNo;
 use wezterm_dynamic::Value;
 use wezterm_font::FontConfiguration;
-use wezterm_term::color::ColorPalette;
+use wezterm_term::color::{ColorAttribute, ColorPalette, SrgbaTuple};
 use wezterm_term::input::LastMouseClick;
 use wezterm_term::{Alert, Progress, StableRowIndex, TerminalConfiguration, TerminalSize};
 
@@ -109,6 +109,11 @@ pub fn set_window_class(cls: &str) {
 
 pub fn get_window_class() -> String {
     WINDOW_CLASS.lock().unwrap().clone()
+}
+
+/// Whether wezterm draws its own tab bar, which the native toolbar replaces on macos
+fn draws_tab_bar(config: &ConfigHandle) -> bool {
+    config.enable_tab_bar && !(cfg!(target_os = "macos") && config.macos_native_tab_bar)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -397,6 +402,10 @@ pub struct TermWindow {
     show_tab_bar: bool,
     show_scroll_bar: bool,
     tab_bar: TabBarState,
+    /// what the native toolbar last showed, with macos_native_tab_bar
+    native_tabs: Vec<NativeTab>,
+    /// each tab's status icon in the native toolbar, set from lua
+    tab_statuses: Vec<Option<StatusIcon>>,
     fancy_tab_bar: Option<box_model::ComputedElement>,
     pub right_status: String,
     pub left_status: String,
@@ -611,7 +620,7 @@ impl TermWindow {
 
         // Initially we have only a single tab, so take that into account
         // for the tab bar state.
-        let show_tab_bar = config.enable_tab_bar && !config.hide_tab_bar_if_only_one_tab;
+        let show_tab_bar = draws_tab_bar(&config) && !config.hide_tab_bar_if_only_one_tab;
         let tab_bar_height = if show_tab_bar {
             Self::tab_bar_pixel_height_impl(&config, &fontconfig, &render_metrics)? as usize
         } else {
@@ -718,6 +727,8 @@ impl TermWindow {
             leader_is_down: None,
             dead_key_status: DeadKeyStatus::None,
             show_tab_bar,
+            native_tabs: vec![],
+            tab_statuses: vec![],
             show_scroll_bar: config.enable_scroll_bar,
             tab_bar: TabBarState::default(),
             fancy_tab_bar: None,
@@ -894,6 +905,8 @@ impl TermWindow {
             }
             myself.load_os_parameters();
             window.show();
+            // the native toolbar gets its first tabs now that the window handle exists
+            myself.update_title();
             myself.subscribe_to_pane_updates();
             myself.emit_window_event("window-config-reloaded", None);
             myself.emit_status_event();
@@ -956,6 +969,56 @@ impl TermWindow {
                 if let Some(pane) = self.get_active_pane_or_overlay() {
                     self.perform_key_assignment(&pane, &action)?;
                     window.invalidate();
+                }
+                Ok(true)
+            }
+            WindowEvent::ToolbarMenuItem(item_id) => {
+                if let Some(pane) = self.get_active_pane_or_overlay() {
+                    let window = GuiWin::new(self);
+                    let pane = MuxPane(pane.pane_id());
+                    promise::spawn::spawn(config::with_lua_config_on_main_thread(
+                        move |lua| async move {
+                            if let Some(lua) = lua {
+                                let args = lua.pack_multi((window, pane, item_id))?;
+                                config::lua::emit_event(
+                                    &lua,
+                                    ("toolbar-menu-item".to_string(), args),
+                                )
+                                .await?;
+                            }
+                            Ok(())
+                        },
+                    ))
+                    .detach();
+                }
+                Ok(true)
+            }
+            // a handler returning false keeps the menu closed, else the current menu opens
+            WindowEvent::ToolbarLabelPressed => {
+                if let Some(pane) = self.get_active_pane_or_overlay() {
+                    let gui = GuiWin::new(self);
+                    let pane = MuxPane(pane.pane_id());
+                    let win = window.clone();
+                    promise::spawn::spawn(config::with_lua_config_on_main_thread(
+                        move |lua| async move {
+                            let show = match lua {
+                                Some(lua) => {
+                                    let args = lua.pack_multi((gui, pane))?;
+                                    config::lua::emit_event(
+                                        &lua,
+                                        ("toolbar-label-pressed".to_string(), args),
+                                    )
+                                    .await?
+                                }
+                                None => true,
+                            };
+                            if show {
+                                win.show_toolbar_menu();
+                            }
+                            Ok(())
+                        },
+                    ))
+                    .detach();
                 }
                 Ok(true)
             }
@@ -1767,10 +1830,12 @@ impl TermWindow {
             _ => return,
         };
         if window.count_tabs() == 1 {
-            self.show_tab_bar = config.enable_tab_bar && !config.hide_tab_bar_if_only_one_tab;
+            self.show_tab_bar = draws_tab_bar(&config) && !config.hide_tab_bar_if_only_one_tab;
         } else {
-            self.show_tab_bar = config.enable_tab_bar;
+            self.show_tab_bar = draws_tab_bar(&config);
         }
+        // a reload may have added the toolbar, so it gets the tabs again
+        self.native_tabs.clear();
         *self.cursor_blink_state.borrow_mut() = ColorEase::new(
             config.cursor_blink_rate,
             config.cursor_blink_ease_in,
@@ -2027,6 +2092,15 @@ impl TermWindow {
                 window.invalidate();
             }
         }
+        if self.config.macos_native_tab_bar {
+            let native_tabs = self.native_tabs_from_tab_bar();
+            if native_tabs != self.native_tabs {
+                if let Some(window) = self.window.as_ref() {
+                    window.set_native_tabs(native_tabs.clone());
+                    self.native_tabs = native_tabs;
+                }
+            }
+        }
 
         let tabs_count = window.count_tabs();
         if tabs_count == 0 {
@@ -2092,9 +2166,9 @@ impl TermWindow {
             window.set_title(&title);
 
             let show_tab_bar = if tabs_count == 1 {
-                self.config.enable_tab_bar && !self.config.hide_tab_bar_if_only_one_tab
+                draws_tab_bar(&self.config) && !self.config.hide_tab_bar_if_only_one_tab
             } else {
-                self.config.enable_tab_bar
+                draws_tab_bar(&self.config)
             };
 
             // If the number of tabs changed and caused the tab bar to
@@ -2106,6 +2180,50 @@ impl TermWindow {
             }
         }
         self.schedule_next_status_update();
+    }
+
+    /// Sets each tab's native toolbar status icon by tab index, from window:set_toolbar_tab_status
+    pub fn set_tab_statuses(&mut self, statuses: Vec<Option<StatusIcon>>) {
+        if statuses != self.tab_statuses {
+            self.tab_statuses = statuses;
+            self.update_title();
+        }
+    }
+
+    /// The tab titles as runs of text in their format-tab-title foreground,
+    /// with no colour where the title left the default
+    fn native_tabs_from_tab_bar(&mut self) -> Vec<NativeTab> {
+        let tabs: Vec<_> = self
+            .tab_bar
+            .items()
+            .iter()
+            .filter_map(|entry| match entry.item {
+                TabBarItem::Tab { active, .. } => Some((entry.title.clone(), active)),
+                _ => None,
+            })
+            .collect();
+        let palette = self.palette().clone();
+        tabs.into_iter()
+            .enumerate()
+            .map(|(idx, (title, active))| {
+                let mut runs: Vec<(String, Option<SrgbaTuple>)> = vec![];
+                for cell in title.visible_cells() {
+                    let color = match cell.attrs().foreground() {
+                        ColorAttribute::Default => None,
+                        color => Some(palette.resolve_fg(color)),
+                    };
+                    match runs.last_mut() {
+                        Some((text, last)) if *last == color => text.push_str(cell.str()),
+                        _ => runs.push((cell.str().to_string(), color)),
+                    }
+                }
+                NativeTab {
+                    runs,
+                    active,
+                    status: self.tab_statuses.get(idx).cloned().flatten(),
+                }
+            })
+            .collect()
     }
 
     fn schedule_next_status_update(&mut self) {

@@ -88,6 +88,8 @@ impl MyWindow {
             | WindowEvent::DroppedUrl(_)
             | WindowEvent::DroppedString(_)
             | WindowEvent::PerformKeyAssignment(_)
+            | WindowEvent::ToolbarMenuItem(_)
+            | WindowEvent::ToolbarLabelPressed
             | WindowEvent::MouseLeave
             | WindowEvent::SetInnerSizeCompleted => {}
         }

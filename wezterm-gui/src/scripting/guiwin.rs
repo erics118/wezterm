@@ -3,6 +3,7 @@ use super::luaerr;
 use crate::termwindow::TermWindowNotif;
 use crate::TermWindow;
 use config::keyassignment::{ClipboardCopyDestination, KeyAssignment};
+use config::RgbaColor;
 use luahelper::*;
 use mlua::{UserData, UserDataMethods, UserDataRef};
 use mux::pane::PaneId;
@@ -12,7 +13,28 @@ use mux_lua::MuxPane;
 use termwiz_funcs::lines_to_escapes;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 use wezterm_toast_notification::ToastNotification;
-use window::{Connection, ConnectionOps, DeadKeyStatus, WindowOps, WindowState};
+use window::{
+    Connection, ConnectionOps, DeadKeyStatus, StatusIcon, ToolbarLabel, ToolbarMenuItem, WindowOps,
+    WindowState,
+};
+
+/// A status icon from lua, where an empty symbol means none
+#[derive(FromDynamic, Default)]
+struct Icon {
+    #[dynamic(default)]
+    symbol: String,
+    #[dynamic(default)]
+    color: Option<RgbaColor>,
+}
+
+impl Icon {
+    fn into_status(self) -> Option<StatusIcon> {
+        (!self.symbol.is_empty()).then(|| StatusIcon {
+            symbol: self.symbol,
+            color: self.color.map(Into::into),
+        })
+    }
+}
 
 #[derive(Clone)]
 pub struct GuiWin {
@@ -104,6 +126,76 @@ impl UserData for GuiWin {
         });
         methods.add_method("set_left_status", |_, this, status: String| {
             this.window.notify(TermWindowNotif::SetLeftStatus(status));
+            Ok(())
+        });
+        methods.add_method("set_toolbar_label", |_, this, value: mlua::Value| {
+            #[derive(FromDynamic, Default)]
+            struct MenuItem {
+                #[dynamic(default)]
+                id: String,
+                #[dynamic(default)]
+                title: String,
+                #[dynamic(default)]
+                checked: bool,
+                #[dynamic(default)]
+                mixed: bool,
+                #[dynamic(default)]
+                icon: Icon,
+                #[dynamic(default)]
+                header: bool,
+            }
+            #[derive(FromDynamic, Default)]
+            struct Label {
+                #[dynamic(default)]
+                symbol: String,
+                #[dynamic(default)]
+                symbol_color: Option<RgbaColor>,
+                #[dynamic(default)]
+                title: String,
+                #[dynamic(default)]
+                subtitle: String,
+                #[dynamic(default)]
+                dimmed: bool,
+                #[dynamic(default)]
+                menu: Vec<MenuItem>,
+            }
+            let label = Label::from_dynamic(&lua_value_to_dynamic(value)?, Default::default())
+                .map_err(|e| mlua::Error::external(format!("{e:#}")))?;
+            this.window.set_toolbar_label(ToolbarLabel {
+                symbol: label.symbol,
+                symbol_color: label.symbol_color.map(Into::into),
+                title: label.title,
+                subtitle: label.subtitle,
+                dimmed: label.dimmed,
+                menu: label
+                    .menu
+                    .into_iter()
+                    .map(|item| ToolbarMenuItem {
+                        id: item.id,
+                        title: item.title,
+                        checked: item.checked,
+                        mixed: item.mixed,
+                        icon: item.icon.into_status(),
+                        header: item.header,
+                    })
+                    .collect(),
+            });
+            Ok(())
+        });
+        methods.add_method("show_toolbar_menu", |_, this, _: ()| {
+            this.window.show_toolbar_menu();
+            Ok(())
+        });
+        methods.add_method("set_toolbar_tab_status", |_, this, value: mlua::Value| {
+            let icons =
+                Vec::<Icon>::from_dynamic(&lua_value_to_dynamic(value)?, Default::default())
+                    .map_err(|e| mlua::Error::external(format!("{e:#}")))?;
+            let statuses: Vec<Option<StatusIcon>> =
+                icons.into_iter().map(Icon::into_status).collect();
+            this.window
+                .notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+                    term_window.set_tab_statuses(statuses);
+                })));
             Ok(())
         });
         methods.add_async_method("get_dimensions", |_, this, _: ()| async move {
