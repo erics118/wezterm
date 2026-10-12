@@ -33,19 +33,21 @@ const PRIORITY_REQUIRED: f32 = 1000.;
 const IMAGE_SCALE_NONE: usize = 2;
 const ORDER_BELOW: isize = -1;
 
-// sizes in points, measured from activity monitor's toolbar segmented control
-const GROUP_HEIGHT: f64 = 36.;
-const GROUP_INSET: f64 = 4.;
+// sizes in points, measured from activity monitor's toolbar segmented control.
+// the group is 2 shorter and its inset 1 smaller than activity monitor's.
+// the title size and the divider height come from safari's tab bar
+const GROUP_HEIGHT: f64 = 34.;
+const GROUP_INSET: f64 = 3.;
 const TAB_HEIGHT: f64 = GROUP_HEIGHT - 2. * GROUP_INSET;
 // past this many points a tab stops shrinking, and the group scrolls instead
 const TAB_MIN_WIDTH: f64 = 150.;
 const TAB_MAX_WIDTH: f64 = 300.;
 const GROUP_TRAILING: f64 = 40.;
-const TITLE_SIZE: f64 = 14.;
+const TITLE_SIZE: f64 = 13.;
 const STATUS_LEADING: f64 = 10.;
 const TITLE_TRAILING: f64 = 10.;
 const TITLE_FADE: f64 = 24.;
-const DIVIDER_HEIGHT: f64 = 11.;
+const DIVIDER_HEIGHT: f64 = 16.;
 const MENU_GAP: f64 = 4.;
 const CLOSE_SIZE: f64 = 16.;
 const STATUS_SIZE: f64 = 11.;
