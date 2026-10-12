@@ -31,6 +31,7 @@ const FONT_WEIGHT_SEMIBOLD: f64 = 0.3;
 const PRIORITY_LOW: f32 = 1.;
 const PRIORITY_REQUIRED: f32 = 1000.;
 const IMAGE_SCALE_NONE: usize = 2;
+const ORDER_BELOW: isize = -1;
 
 // sizes in points, measured from activity monitor's toolbar segmented control
 const GROUP_HEIGHT: f64 = 36.;
@@ -64,11 +65,14 @@ const LABEL_PADDING: f64 = 12.;
 // overlays of white, so the tabs follow the terminal background.
 // the group fill stands in for the glass on systems without it
 const GROUP_FILL: f64 = 0.12;
+// the active pill on systems without glass
 const ACTIVE_FILL: f64 = 0.10;
+// the hover pill, and the circle behind the x
+const HOVER_FILL: f64 = 0.07;
 const DIVIDER: f64 = 0.16;
 
-// NSTrackingArea options: entered and exited, in any app state, over the visible rect
-const TRACKING_OPTIONS: usize = 0x01 | 0x80 | 0x200;
+// NSTrackingArea options: entered, exited and moved, in any app state, over the visible rect
+const TRACKING_OPTIONS: usize = 0x01 | 0x02 | 0x80 | 0x200;
 
 #[repr(C)]
 struct EdgeInsets {
@@ -429,15 +433,14 @@ unsafe fn fill_label(row: id, label: &ToolbarLabel) {
 unsafe fn fill_tabs(group: id, tabs: &[NativeTab]) {
     clear(group);
     for (idx, tab) in tabs.iter().enumerate() {
-        let next_to_active = tab.active || (idx > 0 && tabs[idx - 1].active);
-        let _: () =
-            msg_send![group, addArrangedSubview: tab_view(idx, tab, idx > 0 && !next_to_active)];
+        let _: () = msg_send![group, addArrangedSubview: tab_view(idx, tab)];
     }
+    show_dividers(group);
 }
 
-/// The title and a close button, with a pill behind the active tab and a divider before it.
+/// The title and a close button, with a pill behind the tab and a divider before it.
 /// every tab after the first keeps its divider and only hides it, so switching tabs moves nothing
-unsafe fn tab_view(idx: usize, tab: &NativeTab, show_divider: bool) -> id {
+unsafe fn tab_view(idx: usize, tab: &NativeTab) -> id {
     let view: id = msg_send![tab_class(), new];
     let _: () = msg_send![view, autorelease];
     (*view).set_ivar::<isize>("idx", idx as isize);
@@ -447,14 +450,29 @@ unsafe fn tab_view(idx: usize, tab: &NativeTab, show_divider: bool) -> id {
     constrain(msg_send![view, widthAnchor], ">=", TAB_MIN_WIDTH);
     // every tab has a layer, since dragging slides them all
     let _: () = msg_send![view, setWantsLayer: YES];
-    if tab.active {
-        fill(view, ACTIVE_FILL, TAB_HEIGHT / 2.);
-    }
+
+    // the active tab sits on liquid glass where the system has it, and any other tab shows its pill on hover
+    let pill: id = match Class::get("NSGlassEffectView").filter(|_| tab.active) {
+        Some(glass) => {
+            let pill: id = msg_send![glass, new];
+            let _: () = msg_send![pill, setCornerRadius: TAB_HEIGHT / 2.];
+            pill
+        }
+        None => {
+            let pill: id = msg_send![class!(NSView), new];
+            fill(pill, if tab.active { ACTIVE_FILL } else { HOVER_FILL }, TAB_HEIGHT / 2.);
+            let _: () = msg_send![pill, setAlphaValue: if tab.active { 1.0f64 } else { 0. }];
+            pill
+        }
+    };
+    let _: () = msg_send![view, addSubview: pill];
+    pin(pill, view);
+    (*view).set_ivar::<id>("pill", pill);
+    let _: () = msg_send![pill, release];
 
     if idx > 0 {
         let divider: id = msg_send![class!(NSView), new];
         fill(divider, DIVIDER, 0.);
-        let _: () = msg_send![divider, setAlphaValue: if show_divider { 1.0f64 } else { 0. }];
         let _: () = msg_send![view, addSubview: divider];
         let _: () = msg_send![divider, setTranslatesAutoresizingMaskIntoConstraints: NO];
         constrain(msg_send![divider, widthAnchor], "=", 1.);
@@ -499,6 +517,27 @@ unsafe fn tab_view(idx: usize, tab: &NativeTab, show_divider: bool) -> id {
         0.,
     );
     (*view).set_ivar::<id>("close", close);
+
+    // the circle behind the x on hover is a view of its own, since a button's frame overhangs its constraints
+    let circle: id = msg_send![class!(NSView), new];
+    fill(circle, HOVER_FILL, CLOSE_SIZE / 2.);
+    let _: () = msg_send![circle, setAlphaValue: 0.0f64];
+    let _: () = msg_send![view, addSubview: circle positioned: ORDER_BELOW relativeTo: close];
+    let _: () = msg_send![circle, setTranslatesAutoresizingMaskIntoConstraints: NO];
+    constrain(msg_send![circle, widthAnchor], "=", CLOSE_SIZE);
+    constrain(msg_send![circle, heightAnchor], "=", CLOSE_SIZE);
+    join(
+        msg_send![circle, centerXAnchor],
+        msg_send![close, centerXAnchor],
+        0.,
+    );
+    join(
+        msg_send![circle, centerYAnchor],
+        msg_send![close, centerYAnchor],
+        0.,
+    );
+    (*view).set_ivar::<id>("circle", circle);
+    let _: () = msg_send![circle, release];
 
     // the status slot keeps its width when empty, so a status coming or going moves no title
     let slot: id = msg_send![class!(NSImageView), new];
@@ -547,12 +586,45 @@ unsafe fn tab_view(idx: usize, tab: &NativeTab, show_divider: bool) -> id {
 
 /// The tabs of the group a tab is in, in order
 unsafe fn siblings(tab: id) -> Vec<id> {
-    let group: id = msg_send![tab, superview];
+    tabs_in(msg_send![tab, superview])
+}
+
+/// The group's tabs, in order
+unsafe fn tabs_in(group: id) -> Vec<id> {
     let views: id = msg_send![group, arrangedSubviews];
     let count: usize = msg_send![views, count];
     (0..count)
         .map(|i| msg_send![views, objectAtIndex: i])
         .collect()
+}
+
+/// Shows each divider unless a tab beside it is active, hovered or dragged.
+/// a drag shifts tabs a slot over, so a divider goes by the slot its tab is in
+unsafe fn show_dividers(group: id) {
+    let tabs = tabs_in(group);
+    let Some(&first) = tabs.first() else {
+        return;
+    };
+    let frame: NSRect = msg_send![first, frame];
+    let last = tabs.len() as isize - 1;
+    let slot = |i: usize, tab: id| {
+        let dx = *(*tab).get_ivar::<f64>("drag_x");
+        drop_index(i as isize, dx, frame.size.width, last) as usize
+    };
+    let mut lit = vec![false; tabs.len()];
+    for (i, &tab) in tabs.iter().enumerate() {
+        lit[slot(i, tab)] = ["active", "hovered", "dragging"]
+            .iter()
+            .any(|name| *(*tab).get_ivar::<isize>(name) != 0);
+    }
+    for (i, &tab) in tabs.iter().enumerate() {
+        let divider = *(*tab).get_ivar::<id>("divider");
+        if !divider.is_null() {
+            let s = slot(i, tab);
+            let shown = s > 0 && !lit[s] && !lit[s - 1];
+            let _: () = msg_send![divider, setAlphaValue: if shown { 1.0f64 } else { 0. }];
+        }
+    }
 }
 
 /// The slot a tab from idx lands in when shifted by dx, with every tab width wide
@@ -677,16 +749,18 @@ fn tab_class() -> &'static Class {
         }
     }
 
-    // the close button fades in and out
+    // the close button shows and hides, and so does the pill of a tab that is not active
     extern "C" fn set_hover(this: &mut Object, hovered: bool) {
         unsafe {
-            let close = *this.get_ivar::<id>("close");
-            let _: () = msg_send![class!(NSAnimationContext), beginGrouping];
-            let context: id = msg_send![class!(NSAnimationContext), currentContext];
-            let _: () = msg_send![context, setDuration: SLIDE_DURATION];
-            let animator: id = msg_send![close, animator];
-            let _: () = msg_send![animator, setAlphaValue: if hovered { 1.0f64 } else { 0. }];
-            let _: () = msg_send![class!(NSAnimationContext), endGrouping];
+            this.set_ivar::<isize>("hovered", hovered as isize);
+            let mut shown = vec![*this.get_ivar::<id>("close")];
+            if *this.get_ivar::<isize>("active") == 0 {
+                shown.push(*this.get_ivar::<id>("pill"));
+            }
+            for view in shown {
+                let _: () = msg_send![view, setAlphaValue: if hovered { 1.0f64 } else { 0. }];
+            }
+            show_dividers(msg_send![this, superview]);
         }
     }
 
@@ -696,6 +770,22 @@ fn tab_class() -> &'static Class {
 
     extern "C" fn mouse_exited(this: &mut Object, _sel: Sel, _event: id) {
         set_hover(this, false);
+        unsafe {
+            let _: () = msg_send![*this.get_ivar::<id>("circle"), setAlphaValue: 0.0f64];
+        }
+    }
+
+    // the x gets a circle behind it while the pointer is on it
+    extern "C" fn mouse_moved(this: &mut Object, _sel: Sel, event: id) {
+        unsafe {
+            let close = *this.get_ivar::<id>("close");
+            let point: NSPoint = msg_send![event, locationInWindow];
+            let local: NSPoint = msg_send![close, convertPoint: point fromView: nil];
+            let bounds: NSRect = msg_send![close, bounds];
+            let inside: BOOL = msg_send![close, mouse: local inRect: bounds];
+            let circle = *this.get_ivar::<id>("circle");
+            let _: () = msg_send![circle, setAlphaValue: if inside == YES { 1.0f64 } else { 0. }];
+        }
     }
 
     extern "C" fn mouse_down(this: &mut Object, _sel: Sel, event: id) {
@@ -726,13 +816,6 @@ fn tab_class() -> &'static Class {
                 this.set_ivar::<isize>("dragging", 1);
                 let layer: id = msg_send![me, layer];
                 let _: () = msg_send![layer, setZPosition: 1.0f64];
-                // the dividers would sit between moving tabs, so they hide until the drop
-                for &tab in &tabs {
-                    let divider = *(*tab).get_ivar::<id>("divider");
-                    if !divider.is_null() {
-                        let _: () = msg_send![divider, setAlphaValue: 0.0f64];
-                    }
-                }
             }
             this.set_ivar::<f64>("drag_x", dx);
             slide(me, dx, false);
@@ -754,6 +837,7 @@ fn tab_class() -> &'static Class {
                     slide(tab, offset, true);
                 }
             }
+            show_dividers(msg_send![me, superview]);
         }
     }
 
@@ -786,16 +870,8 @@ fn tab_class() -> &'static Class {
             // nothing moved, so the tabs rebuild only if the activation changed, and the drag undoes itself
             let layer: id = msg_send![me, layer];
             let _: () = msg_send![layer, setZPosition: 0.0f64];
-            let mut previous_active = true;
-            for &tab in &tabs {
-                let active = *(*tab).get_ivar::<isize>("active") != 0;
-                let divider = *(*tab).get_ivar::<id>("divider");
-                if !divider.is_null() {
-                    let shown = !active && !previous_active;
-                    let _: () = msg_send![divider, setAlphaValue: if shown { 1.0f64 } else { 0. }];
-                }
-                previous_active = active;
-            }
+            this.set_ivar::<f64>("drag_x", 0.);
+            show_dividers(msg_send![me, superview]);
         }
     }
 
@@ -809,7 +885,10 @@ fn tab_class() -> &'static Class {
         // how far the tab is shifted: by the pointer when it is dragged, by the drag when it is passed
         cls.add_ivar::<f64>("drag_x");
         cls.add_ivar::<isize>("dragging");
+        cls.add_ivar::<isize>("hovered");
         cls.add_ivar::<id>("close");
+        cls.add_ivar::<id>("circle");
+        cls.add_ivar::<id>("pill");
         cls.add_ivar::<id>("divider");
         unsafe {
             cls.add_method(sel!(tag), tag as extern "C" fn(&Object, Sel) -> isize);
@@ -840,6 +919,10 @@ fn tab_class() -> &'static Class {
             cls.add_method(
                 sel!(mouseExited:),
                 mouse_exited as extern "C" fn(&mut Object, Sel, id),
+            );
+            cls.add_method(
+                sel!(mouseMoved:),
+                mouse_moved as extern "C" fn(&mut Object, Sel, id),
             );
             cls.add_method(
                 sel!(mouseDown:),
