@@ -49,6 +49,9 @@ const MENU_GAP: f64 = 4.;
 const CLOSE_SIZE: f64 = 16.;
 const STATUS_SIZE: f64 = 11.;
 const STATUS_SLOT: f64 = 14.;
+const CONTROL_STATE_MIXED: isize = -1;
+const CONTROL_STATE_OFF: isize = 0;
+const CONTROL_STATE_ON: isize = 1;
 const STATUS_GAP: f64 = 6.;
 const CLOSE_TRAILING: f64 = 8.;
 // a press that moves less than this is a click, not a drag
@@ -157,7 +160,14 @@ unsafe fn menu(items: &[ToolbarMenuItem]) -> id {
                 keyEquivalent: *nsstring("")];
             let _: () = msg_send![entry, autorelease];
             let _: () = msg_send![entry, setRepresentedObject: *nsstring(&item.id)];
-            let _: () = msg_send![entry, setState: item.checked as isize];
+            let state = if item.checked {
+                CONTROL_STATE_ON
+            } else if item.mixed {
+                CONTROL_STATE_MIXED
+            } else {
+                CONTROL_STATE_OFF
+            };
+            let _: () = msg_send![entry, setState: state];
             if let Some(icon) = &item.icon {
                 let _: () = msg_send![entry, setImage: status_image(icon, STATUS_SIZE)];
             }

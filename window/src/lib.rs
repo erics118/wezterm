@@ -183,6 +183,8 @@ pub struct ToolbarMenuItem {
     pub id: String,
     pub title: String,
     pub checked: bool,
+    /// a dash in place of the checkmark, when checked is false
+    pub mixed: bool,
     pub icon: Option<StatusIcon>,
     /// a section header, which shows its title and cannot be chosen
     pub header: bool,

@@ -138,6 +138,8 @@ impl UserData for GuiWin {
                 #[dynamic(default)]
                 checked: bool,
                 #[dynamic(default)]
+                mixed: bool,
+                #[dynamic(default)]
                 icon: Icon,
                 #[dynamic(default)]
                 header: bool,
@@ -172,6 +174,7 @@ impl UserData for GuiWin {
                         id: item.id,
                         title: item.title,
                         checked: item.checked,
+                        mixed: item.mixed,
                         icon: item.icon.into_status(),
                         header: item.header,
                     })
