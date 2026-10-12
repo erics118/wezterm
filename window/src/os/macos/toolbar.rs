@@ -118,11 +118,36 @@ pub unsafe fn set_label(window: id, label: &ToolbarLabel) {
     let _: () = msg_send![view, setMenu: menu(&label.menu)];
 }
 
-/// Opens the label's menu as a click on it does, when the window has the toolbar
+/// Opens the label's menu under it, when the window has the toolbar
 pub unsafe fn show_label_menu(window: id) {
     if let Some(view) = item_view(window, LABEL) {
-        let _: () = msg_send![view, mouseDown: nil];
+        pop_menu(view);
     }
+}
+
+/// Pops the label's menu under it, at least as wide
+unsafe fn pop_menu(me: id) {
+    let menu: id = msg_send![me, menu];
+    let count: isize = if menu.is_null() {
+        0
+    } else {
+        msg_send![menu, numberOfItems]
+    };
+    if count == 0 {
+        return;
+    }
+    let bounds: NSRect = msg_send![me, bounds];
+    let _: () = msg_send![menu, setMinimumWidth: bounds.size.width];
+    let flipped: BOOL = msg_send![me, isFlipped];
+    let below = if flipped == YES {
+        bounds.size.height + MENU_GAP
+    } else {
+        -MENU_GAP
+    };
+    let _: BOOL = msg_send![menu,
+        popUpMenuPositioningItem: nil
+        atLocation: NSPoint::new(0., below)
+        inView: me];
 }
 
 /// The colour, or the secondary label colour when None
@@ -962,32 +987,9 @@ fn label_class() -> &'static Class {
         }
     }
 
-    // the menu opens under the label, at least as wide
+    // the window decides whether the menu opens (see WindowEvent::ToolbarLabelPressed)
     extern "C" fn mouse_down(this: &mut Object, _sel: Sel, _event: id) {
-        unsafe {
-            let me = this as *mut Object;
-            let menu: id = msg_send![me, menu];
-            let count: isize = if menu.is_null() {
-                0
-            } else {
-                msg_send![menu, numberOfItems]
-            };
-            if count == 0 {
-                return;
-            }
-            let bounds: NSRect = msg_send![me, bounds];
-            let _: () = msg_send![menu, setMinimumWidth: bounds.size.width];
-            let flipped: BOOL = msg_send![me, isFlipped];
-            let below = if flipped == YES {
-                bounds.size.height + MENU_GAP
-            } else {
-                -MENU_GAP
-            };
-            let _: BOOL = msg_send![menu,
-                popUpMenuPositioningItem: nil
-                atLocation: NSPoint::new(0., below)
-                inView: me];
-        }
+        unsafe { send_action(sel!(weztermToolbarLabelPressed:), this as *mut Object) }
     }
 
     Class::get("WezTermToolbarLabel").unwrap_or_else(|| {

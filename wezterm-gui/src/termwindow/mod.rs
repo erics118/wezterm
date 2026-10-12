@@ -993,6 +993,35 @@ impl TermWindow {
                 }
                 Ok(true)
             }
+            // a handler returning false keeps the menu closed, else the current menu opens
+            WindowEvent::ToolbarLabelPressed => {
+                if let Some(pane) = self.get_active_pane_or_overlay() {
+                    let gui = GuiWin::new(self);
+                    let pane = MuxPane(pane.pane_id());
+                    let win = window.clone();
+                    promise::spawn::spawn(config::with_lua_config_on_main_thread(
+                        move |lua| async move {
+                            let show = match lua {
+                                Some(lua) => {
+                                    let args = lua.pack_multi((gui, pane))?;
+                                    config::lua::emit_event(
+                                        &lua,
+                                        ("toolbar-label-pressed".to_string(), args),
+                                    )
+                                    .await?
+                                }
+                                None => true,
+                            };
+                            if show {
+                                win.show_toolbar_menu();
+                            }
+                            Ok(())
+                        },
+                    ))
+                    .detach();
+                }
+                Ok(true)
+            }
             WindowEvent::FocusChanged(focused) => {
                 self.focus_changed(focused, window);
                 Ok(true)

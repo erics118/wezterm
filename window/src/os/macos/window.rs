@@ -2586,6 +2586,16 @@ impl WindowView {
         }
     }
 
+    // the native toolbar label was pressed
+    extern "C" fn wezterm_toolbar_label_pressed(this: &mut Object, _sel: Sel, _from: *mut Object) {
+        if let Some(this) = Self::get_this(this) {
+            this.inner
+                .borrow_mut()
+                .events
+                .dispatch(WindowEvent::ToolbarLabelPressed);
+        }
+    }
+
     extern "C" fn wezterm_perform_key_assignment(
         this: &mut Object,
         _sel: Sel,
@@ -3573,6 +3583,10 @@ impl WindowView {
             cls.add_method(
                 sel!(weztermToolbarMenuItem:),
                 Self::wezterm_toolbar_menu_item as extern "C" fn(&mut Object, Sel, *mut Object),
+            );
+            cls.add_method(
+                sel!(weztermToolbarLabelPressed:),
+                Self::wezterm_toolbar_label_pressed as extern "C" fn(&mut Object, Sel, *mut Object),
             );
             cls.add_method(
                 sel!(weztermMoveTab:),

@@ -255,6 +255,9 @@ pub enum WindowEvent {
 
     /// An entry of the native titlebar's label menu was chosen, by its id
     ToolbarMenuItem(String),
+
+    /// The native titlebar's label was pressed, before its menu opens
+    ToolbarLabelPressed,
 }
 
 pub struct WindowEventSender {
