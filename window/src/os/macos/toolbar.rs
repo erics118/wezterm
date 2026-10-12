@@ -404,7 +404,7 @@ unsafe fn fill_label(row: id, label: &ToolbarLabel) {
     let line_styles: [(&str, id, id); 2] = [
         (
             &label.title,
-            msg_send![class!(NSFont), systemFontOfSize: 14.0f64 weight: FONT_WEIGHT_SEMIBOLD],
+            msg_send![class!(NSFont), systemFontOfSize: TITLE_SIZE weight: FONT_WEIGHT_SEMIBOLD],
             title_color,
         ),
         (
