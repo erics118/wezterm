@@ -139,6 +139,8 @@ impl UserData for GuiWin {
                 checked: bool,
                 #[dynamic(default)]
                 icon: Icon,
+                #[dynamic(default)]
+                header: bool,
             }
             #[derive(FromDynamic, Default)]
             struct Label {
@@ -171,9 +173,14 @@ impl UserData for GuiWin {
                         title: item.title,
                         checked: item.checked,
                         icon: item.icon.into_status(),
+                        header: item.header,
                     })
                     .collect(),
             });
+            Ok(())
+        });
+        methods.add_method("show_toolbar_menu", |_, this, _: ()| {
+            this.window.show_toolbar_menu();
             Ok(())
         });
         methods.add_method("set_toolbar_tab_status", |_, this, value: mlua::Value| {

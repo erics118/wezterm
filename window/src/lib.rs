@@ -184,6 +184,8 @@ pub struct ToolbarMenuItem {
     pub title: String,
     pub checked: bool,
     pub icon: Option<StatusIcon>,
+    /// a section header, which shows its title and cannot be chosen
+    pub header: bool,
 }
 
 #[derive(Debug)]
@@ -376,6 +378,9 @@ pub trait WindowOps {
 
     /// Set the label before the native titlebar's tabs, and its menu
     fn set_toolbar_label(&self, _label: ToolbarLabel) {}
+
+    /// Open the toolbar label's menu, as a click on the label does
+    fn show_toolbar_menu(&self) {}
 
     /// Configure the Window so that the desktop environment
     /// will constrain resizes so that they are multiples of

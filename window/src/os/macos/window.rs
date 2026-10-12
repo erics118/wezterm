@@ -989,6 +989,13 @@ impl WindowOps for Window {
         });
     }
 
+    fn show_toolbar_menu(&self) {
+        Connection::with_window_inner(self.id, move |inner| {
+            unsafe { toolbar::show_label_menu(*inner.window) };
+            Ok(())
+        });
+    }
+
     fn get_os_parameters(
         &self,
         config: &ConfigHandle,

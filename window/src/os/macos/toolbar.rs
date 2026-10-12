@@ -109,6 +109,13 @@ pub unsafe fn set_label(window: id, label: &ToolbarLabel) {
     let _: () = msg_send![view, setMenu: menu(&label.menu)];
 }
 
+/// Opens the label's menu as a click on it does, when the window has the toolbar
+pub unsafe fn show_label_menu(window: id) {
+    if let Some(view) = item_view(window, LABEL) {
+        let _: () = msg_send![view, mouseDown: nil];
+    }
+}
+
 /// The colour, or the secondary label colour when None
 unsafe fn color_or_secondary(color: Option<SrgbaTuple>) -> id {
     match color {
@@ -140,6 +147,8 @@ unsafe fn menu(items: &[ToolbarMenuItem]) -> id {
     for item in items {
         let entry: id = if item.title.is_empty() {
             msg_send![class!(NSMenuItem), separatorItem]
+        } else if item.header {
+            msg_send![class!(NSMenuItem), sectionHeaderWithTitle: *nsstring(&item.title)]
         } else {
             let entry: id = msg_send![class!(NSMenuItem), alloc];
             let entry: id = msg_send![entry,
