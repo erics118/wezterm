@@ -826,7 +826,69 @@ fn terminate_with_error(err: anyhow::Error) -> ! {
     terminate_with_error_message(&err_text)
 }
 
+/// A gui launch on macOS starts with launchd's minimal PATH, so programs the gui runs
+/// itself (run_child_process, background_child_process) would miss the user's tools.
+/// Adopt the login shell's PATH, giving up after 1.5s as kitty's read_from_shell does.
+#[cfg(target_os = "macos")]
+fn adopt_login_shell_path() {
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    // a launch from a terminal already has the user's PATH
+    if unsafe { libc::isatty(0) } == 1 {
+        return;
+    }
+    let shell = match std::env::var("SHELL") {
+        Ok(s) if !s.is_empty() => s,
+        _ => return,
+    };
+    let mut cmd = Command::new(&shell);
+    // NULs fence the PATH off from anything the rc files print
+    cmd.args(["-l", "-i", "-c", r#"printf '\0%s\0' "$PATH""#])
+        // from / so no directory hook, such as direnv's, adds a project's PATH
+        .current_dir("/")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    // a new session keeps the interactive shell off any terminal
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let deadline = Instant::now() + Duration::from_millis(1500);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    if let Some(mut stdout) = child.stdout.take() {
+        let _ = stdout.read_to_end(&mut out);
+    }
+    let out = String::from_utf8_lossy(&out);
+    if let Some(path) = out.split('\0').nth(1).filter(|p| !p.is_empty()) {
+        std::env::set_var("PATH", path);
+    }
+}
+
 fn main() {
+    #[cfg(target_os = "macos")]
+    adopt_login_shell_path();
+
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
 
