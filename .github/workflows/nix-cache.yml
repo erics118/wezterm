@@ -4,10 +4,10 @@ name: nix cache
 # so a switch there downloads it from erics118-wezterm instead of building it
 on:
   push:
-    branches: [eric]
+    branches: [main]
   workflow_dispatch:
 
-# only the newest push to eric is worth caching
+# only the newest push to main is worth caching
 concurrency:
   group: nix-cache-${{ github.ref }}
   cancel-in-progress: true
