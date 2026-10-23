@@ -1147,6 +1147,10 @@ fn title_class() -> &'static Class {
             .expect("Unable to register tab title class");
         unsafe {
             cls.add_method(sel!(layout), layout as extern "C" fn(&mut Object, Sel));
+            cls.add_method(
+                sel!(mouseDownCanMoveWindow),
+                no as extern "C" fn(&Object, Sel) -> BOOL,
+            );
         }
         cls.register()
     })
